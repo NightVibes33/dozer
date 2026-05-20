@@ -442,7 +442,18 @@ fn scripted_insert(record: Record) -> Operation {
     Operation::Insert { new: record }
 }
 
-fn execute_scripted_query(sql: &str, operations: Vec<(PortHandle, Operation)>) -> Vec<Vec<Field>> {
+fn scripted_update(old: Record, new: Record) -> Operation {
+    Operation::Update { old, new }
+}
+
+fn scripted_delete(record: Record) -> Operation {
+    Operation::Delete { old: record }
+}
+
+fn execute_scripted_query_operations(
+    sql: &str,
+    operations: Vec<(PortHandle, Operation)>,
+) -> Vec<Operation> {
     let mut pipeline = AppPipeline::new_with_default_flags();
     let runtime = create_test_runtime();
     let context = statement_to_pipeline(sql, &mut pipeline, None, vec![], runtime.clone()).unwrap();
@@ -498,11 +509,78 @@ fn execute_scripted_query(sql: &str, operations: Vec<(PortHandle, Operation)>) -
         .lock()
         .unwrap()
         .iter()
-        .filter_map(|op| match &op.op {
-            Operation::Insert { new } => Some(new.values.clone()),
+        .map(|op| op.op.clone())
+        .collect()
+}
+
+fn execute_scripted_query(sql: &str, operations: Vec<(PortHandle, Operation)>) -> Vec<Vec<Field>> {
+    execute_scripted_query_operations(sql, operations)
+        .into_iter()
+        .filter_map(|op| match op {
+            Operation::Insert { new } => Some(new.values),
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn test_static_in_list_applies_streaming_update_delete_semantics() {
+    let operations = execute_scripted_query_operations(
+        "SELECT users.CustomerID \
+         INTO results \
+         FROM users \
+         WHERE users.CustomerID IN (7, 9)",
+        vec![
+            (
+                DEFAULT_PORT_HANDLE,
+                scripted_insert(scripted_record(8, "France", 7.0, "2020-01-01T00:10:00Z")),
+            ),
+            (
+                DEFAULT_PORT_HANDLE,
+                scripted_update(
+                    scripted_record(8, "France", 7.0, "2020-01-01T00:10:00Z"),
+                    scripted_record(7, "Italy", 5.5, "2020-01-01T00:13:00Z"),
+                ),
+            ),
+            (
+                DEFAULT_PORT_HANDLE,
+                scripted_update(
+                    scripted_record(7, "Italy", 5.5, "2020-01-01T00:13:00Z"),
+                    scripted_record(9, "Spain", 9.0, "2020-01-01T00:14:00Z"),
+                ),
+            ),
+            (
+                DEFAULT_PORT_HANDLE,
+                scripted_update(
+                    scripted_record(9, "Spain", 9.0, "2020-01-01T00:14:00Z"),
+                    scripted_record(8, "France", 7.0, "2020-01-01T00:15:00Z"),
+                ),
+            ),
+            (
+                DEFAULT_PORT_HANDLE,
+                scripted_delete(scripted_record(7, "Italy", 5.5, "2020-01-01T00:13:00Z")),
+            ),
+        ],
+    );
+
+    assert_eq!(
+        operations,
+        vec![
+            Operation::Insert {
+                new: Record::new(vec![Field::Int(7)]),
+            },
+            Operation::Update {
+                old: Record::new(vec![Field::Int(7)]),
+                new: Record::new(vec![Field::Int(9)]),
+            },
+            Operation::Delete {
+                old: Record::new(vec![Field::Int(9)]),
+            },
+            Operation::Delete {
+                old: Record::new(vec![Field::Int(7)]),
+            },
+        ]
+    );
 }
 
 #[test]
