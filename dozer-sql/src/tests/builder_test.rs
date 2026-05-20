@@ -280,3 +280,64 @@ fn test_pipeline_builder() {
     let elapsed = now.elapsed();
     debug!("Elapsed: {:.2?}", elapsed);
 }
+
+#[test]
+fn test_in_subquery_where_clause_builds_pipeline() {
+    let mut pipeline = AppPipeline::new_with_default_flags();
+    let runtime = create_test_runtime();
+    let context = statement_to_pipeline(
+        "SELECT users.CustomerID \
+         INTO results \
+         FROM users \
+         WHERE users.CustomerID IN (SELECT allowed.CustomerID FROM allowed)",
+        &mut pipeline,
+        None,
+        vec![],
+        runtime,
+    )
+    .unwrap();
+
+    assert!(context.output_tables_map.contains_key("results"));
+    assert!(context.used_sources.contains(&"users".to_string()));
+    assert!(context.used_sources.contains(&"allowed".to_string()));
+}
+
+#[test]
+fn test_in_subquery_keeps_additional_where_predicates() {
+    let mut pipeline = AppPipeline::new_with_default_flags();
+    let runtime = create_test_runtime();
+    let context = statement_to_pipeline(
+        "SELECT users.CustomerID \
+         INTO results \
+         FROM users \
+         WHERE users.Spending > 10 \
+         AND users.CustomerID IN (SELECT allowed.CustomerID FROM allowed)",
+        &mut pipeline,
+        None,
+        vec![],
+        runtime,
+    )
+    .unwrap();
+
+    assert!(context.output_tables_map.contains_key("results"));
+    assert!(context.used_sources.contains(&"users".to_string()));
+    assert!(context.used_sources.contains(&"allowed".to_string()));
+}
+
+#[test]
+fn test_in_subquery_rejects_multi_column_projection() {
+    let mut pipeline = AppPipeline::new_with_default_flags();
+    let runtime = create_test_runtime();
+    let result = statement_to_pipeline(
+        "SELECT users.CustomerID \
+         INTO results \
+         FROM users \
+         WHERE users.CustomerID IN (SELECT allowed.CustomerID, allowed.Country FROM allowed)",
+        &mut pipeline,
+        None,
+        vec![],
+        runtime,
+    );
+
+    assert!(result.is_err());
+}
