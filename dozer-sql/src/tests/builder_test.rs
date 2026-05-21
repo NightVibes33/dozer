@@ -832,3 +832,47 @@ fn test_in_subquery_uses_membership_semantics_for_duplicate_inner_rows() {
 
     assert_eq!(rows, vec![vec![Field::Int(7)]]);
 }
+
+#[test]
+fn test_in_subquery_keeps_membership_until_last_duplicate_inner_row_is_deleted() {
+    let operations = execute_scripted_query_operations(
+        "SELECT users.CustomerID \
+         INTO results \
+         FROM users \
+         WHERE users.CustomerID IN (SELECT allowed.CustomerID FROM allowed)",
+        vec![
+            (
+                1,
+                scripted_insert(scripted_record(7, "Allowed", 0.0, "2020-01-01T00:00:00Z")),
+            ),
+            (
+                1,
+                scripted_insert(scripted_record(7, "Allowed", 0.0, "2020-01-01T00:00:00Z")),
+            ),
+            (
+                DEFAULT_PORT_HANDLE,
+                scripted_insert(scripted_record(7, "Italy", 5.5, "2020-01-01T00:13:00Z")),
+            ),
+            (
+                1,
+                scripted_delete(scripted_record(7, "Allowed", 0.0, "2020-01-01T00:00:00Z")),
+            ),
+            (
+                1,
+                scripted_delete(scripted_record(7, "Allowed", 0.0, "2020-01-01T00:00:00Z")),
+            ),
+        ],
+    );
+
+    assert_eq!(
+        operations,
+        vec![
+            Operation::Insert {
+                new: Record::new(vec![Field::Int(7)]),
+            },
+            Operation::Delete {
+                old: Record::new(vec![Field::Int(7)]),
+            },
+        ]
+    );
+}
